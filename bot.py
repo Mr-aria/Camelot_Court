@@ -372,7 +372,8 @@ async def defendant_info_handler(update: Update, context: ContextTypes.DEFAULT_T
         "پس از ارسال همه مدارک، روی دکمه «پایان ارسال مدارک» کلیک کنید.",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ پایان ارسال مدارک", callback_data="evidence_done")]
+            [InlineKeyboardButton("✅ پایان ارسال مدارک", callback_data="evidence_done")],
+            [InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")],
         ])
     )
     get_temp(context)['evidence_texts'] = []
@@ -443,7 +444,7 @@ async def evidence_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     set_state(context, S_CONFIRM)
     return S_CONFIRM
 
-async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """ثبت نهایی شکایت"""
     query = update.callback_query
     await query.answer()
@@ -497,6 +498,7 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     clear_temp(context)
 
     await notify_owner(update, context, complaint_id)
+    return ConversationHandler.END
 
 async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, complaint_id: int):
     complaint = db_one("SELECT * FROM complaints WHERE id = ?", (complaint_id,))
@@ -949,6 +951,9 @@ def main() -> None:
     app.add_handler(complaint_conv)
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_backup_import_conv)
+
+    # Callback handler سراسری برای دکمه لغو (خارج از مکالمه‌ها هم کار کند، مثلاً پنل ادمین)
+    app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel_action$"))
 
     # Callback handler فقط برای کالبک‌های مدیریتی (با پیشوند admin_)
     app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
