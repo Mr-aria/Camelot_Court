@@ -292,6 +292,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """لغو عملیات جاری - هم برای پیام و هم کالبک - برمی‌گرداند ConversationHandler.END"""
     uid = update.effective_user.id
     set_state(context, None)
     clear_temp(context)
@@ -309,6 +310,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             reply_markup=main_menu_kb(uid)
         )
     return ConversationHandler.END
+
+# ==================== Handler سراسری برای دکمه لغو ====================
+
+async def handle_global_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """مدیریت دکمه لغو در خارج از کانورسیشن‌ها (مثل پنل مدیریت)"""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    set_state(context, None)
+    clear_temp(context)
+    await query.edit_message_text(
+        "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
+        reply_markup=main_menu_kb(uid)
+    )
 
 # -----------------------------
 # Complaint Registration Flow
@@ -369,11 +384,12 @@ async def defendant_info_handler(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         "📎 **مدارک و شواهد خود را ارسال کنید.**\n\n"
         "می‌توانید عکس، فایل، لینک پیام تلگرامی یا هر مدرک دیگری ارسال کنید.\n"
-        "پس از ارسال همه مدارک، روی دکمه «پایان ارسال مدارک» کلیک کنید.",
+        "پس از ارسال همه مدارک، روی دکمه «پایان ارسال مدارک» کلیک کنید.\n"
+        "برای لغو عملیات، روی دکمه لغو زیر کلیک کنید.",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ پایان ارسال مدارک", callback_data="evidence_done")],
-            [InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")],
+            [InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")]
         ])
     )
     get_temp(context)['evidence_texts'] = []
@@ -445,7 +461,7 @@ async def evidence_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return S_CONFIRM
 
 async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """ثبت نهایی شکایت"""
+    """ثبت نهایی شکایت - بازگشت ConversationHandler.END برای خاتمه مکالمه"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -498,6 +514,8 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     clear_temp(context)
 
     await notify_owner(update, context, complaint_id)
+    
+    # مهم: بازگشت ConversationHandler.END برای خاتمه مکالمه
     return ConversationHandler.END
 
 async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, complaint_id: int):
@@ -833,9 +851,7 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await query.edit_message_text("🛠 پنل مدیریت", reply_markup=admin_kb(), parse_mode='Markdown')
 
-# -----------------------------
-# Callback Handler (فقط مدیریتی)
-# -----------------------------
+# ==================== Admin Callback Handler (با pattern ^admin_) ====================
 
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """مدیریت کالبک‌های مدیریتی (با پیشوند admin_)"""
@@ -862,9 +878,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await query.answer("دکمه نامعتبر", show_alert=True)
 
-# -----------------------------
-# Message Handler (فقط برای دکمه‌های منو)
-# -----------------------------
+# ==================== Message Handler (فقط برای دکمه‌های منو) ====================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
@@ -891,7 +905,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 complaint_conv = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(complaint_start, pattern="^start_complaint$"),
-        # استفاده از filters.Text با متن دقیق
         MessageHandler(filters.Text(BTN_START_COMPLAINT), complaint_start),
     ],
     states={
@@ -902,7 +915,8 @@ complaint_conv = ConversationHandler(
                 filters.PHOTO | filters.Document.ALL | (filters.TEXT & ~filters.COMMAND),
                 evidence_handler
             ),
-            CallbackQueryHandler(evidence_done, pattern="^evidence_done$")
+            CallbackQueryHandler(evidence_done, pattern="^evidence_done$"),
+            CallbackQueryHandler(cancel, pattern="^cancel_action$"),  # لغو در مرحله مدارک
         ],
         S_CONFIRM: [CallbackQueryHandler(submit_complaint, pattern="^submit_complaint$")],
     },
@@ -947,18 +961,20 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
 
-    # Conversation handlers (اولویت بالاتر)
+    # --- دسته‌بندی handlerها به ترتیب اولویت ---
+
+    # 1. Conversation handlers (اولویت بالاتر)
     app.add_handler(complaint_conv)
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_backup_import_conv)
 
-    # Callback handler سراسری برای دکمه لغو (خارج از مکالمه‌ها هم کار کند، مثلاً پنل ادمین)
-    app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel_action$"))
+    # 2. Handler سراسری برای دکمه لغو (وقتی خارج از مکالمه هستیم)
+    app.add_handler(CallbackQueryHandler(handle_global_cancel, pattern="^cancel_action$"))
 
-    # Callback handler فقط برای کالبک‌های مدیریتی (با پیشوند admin_)
+    # 3. Handler برای کالبک‌های مدیریتی (با پیشوند admin_)
     app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
 
-    # Message handler برای دکمه‌های منو (غیر از دستورات)
+    # 4. Message handler برای دکمه‌های منو و پیام‌های دیگر
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("ربات دادگاه عدالت کملوت با موفقیت راه‌اندازی شد.")
