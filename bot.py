@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ربات دادگاه عدالت کملوت - نسخه پایدار با رفع تمام باگ‌ها"""
+"""ربات دادگاه عدالت کملوت - نسخه نهایی با رفع تمام باگ‌ها"""
 
 from __future__ import annotations
 
@@ -151,9 +151,19 @@ def set_bot_status(status: str) -> None:
     db_exec("INSERT INTO settings(key, value) VALUES('bot_status', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (status,))
 
 def log_action(user_id: Optional[int], action: str, details: str = "") -> None:
+    """ثبت لاگ با توضیحات قابل فهم"""
+    # ترجمه action به فارسی برای نمایش بهتر
+    action_map = {
+        "complaint_submitted": "ثبت شکایت جدید",
+        "admin_reply": "پاسخ به شکایت",
+        "toggle_bot": "تغییر وضعیت ربات",
+        "backup_export": "گرفتن پشتیبان",
+        "backup_import": "بازیابی از پشتیبان",
+    }
+    persian_action = action_map.get(action, action)
     db_exec(
         "INSERT INTO logs(user_id, action, details, created_at) VALUES(?, ?, ?, ?)",
-        (user_id, action, details, now_tehran()),
+        (user_id, persian_action, details, now_tehran()),
     )
 
 def is_owner(uid: int) -> bool:
@@ -374,16 +384,27 @@ async def defendant_info_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def evidence_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     temp = get_temp(context)
+    caption = update.message.caption or ""
+
     if update.message.text:
         temp['evidence_texts'].append(update.message.text)
         await update.message.reply_text("✅ متن به عنوان مدرک ذخیره شد. می‌توانید مدارک دیگر ارسال کنید یا روی دکمه پایان کلیک کنید.")
     elif update.message.photo:
         file_id = update.message.photo[-1].file_id
-        temp['evidence_files'].append({'type': 'photo', 'file_id': file_id})
+        temp['evidence_files'].append({
+            'type': 'photo',
+            'file_id': file_id,
+            'caption': caption
+        })
         await update.message.reply_text("✅ عکس به عنوان مدرک ذخیره شد.")
     elif update.message.document:
         file_id = update.message.document.file_id
-        temp['evidence_files'].append({'type': 'document', 'file_id': file_id})
+        temp['evidence_files'].append({
+            'type': 'document',
+            'file_id': file_id,
+            'caption': caption,
+            'file_name': update.message.document.file_name
+        })
         await update.message.reply_text("✅ فایل به عنوان مدرک ذخیره شد.")
     else:
         await update.message.reply_text("❌ نوع فایل پشتیبانی نمی‌شود. لطفاً عکس، فایل یا متن ارسال کنید.")
@@ -411,6 +432,9 @@ async def evidence_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         summary += "متون: (ندارد)\n"
     if evidence_files:
         summary += f"تعداد فایل‌ها: {len(evidence_files)}\n"
+        for i, f in enumerate(evidence_files, 1):
+            caption = f.get('caption', 'بدون کپشن')
+            summary += f"  {i}. {f['type']} - {caption[:30]}{'...' if len(caption) > 30 else ''}\n"
     else:
         summary += "فایل‌ها: (ندارد)\n"
     summary += "\nآیا اطلاعات صحیح است و می‌خواهید شکایت را ثبت کنید؟"
@@ -432,6 +456,7 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     evidence_texts = temp.get('evidence_texts', [])
     evidence_files = temp.get('evidence_files', [])
 
+    # Parse plaintiff info
     lines = plaintiff_raw.split('\n')
     plaintiff_name = ''
     plaintiff_nid = ''
@@ -447,7 +472,7 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         elif 'آیدی تلگرام' in line:
             plaintiff_tg_id = line.split(':', 1)[-1].strip()
 
-    evidence_files_json = json.dumps(evidence_files) if evidence_files else None
+    evidence_files_json = json.dumps(evidence_files, ensure_ascii=False) if evidence_files else None
     evidence_text_combined = "\n".join(evidence_texts) if evidence_texts else None
     created_at = now_tehran()
     cursor = db_exec(
@@ -462,7 +487,7 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
          defendant_info, evidence_text_combined, evidence_files_json, created_at)
     )
     complaint_id = cursor.lastrowid
-    log_action(uid, "complaint_submitted", f"id={complaint_id}")
+    log_action(uid, "complaint_submitted", f"شکایت #{complaint_id} - شاکی: {plaintiff_name} - متهم: {defendant_info[:30]}...")
 
     await query.edit_message_text(
         "✅ **درخواست شما با موفقیت ثبت شد.**\n\n"
@@ -497,7 +522,11 @@ async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, compl
     else:
         msg += "متن: (ندارد)\n"
     if complaint['evidence_files']:
-        msg += f"تعداد فایل‌ها: {len(json.loads(complaint['evidence_files']))}\n"
+        files = json.loads(complaint['evidence_files'])
+        msg += f"تعداد فایل‌ها: {len(files)}\n"
+        for i, f in enumerate(files, 1):
+            caption = f.get('caption', 'بدون کپشن')
+            msg += f"  {i}. {f['type']} - {caption[:50]}\n"
     else:
         msg += "فایل‌ها: (ندارد)\n"
     msg += f"\n🕐 زمان ثبت: {complaint['created_at']}"
@@ -509,15 +538,25 @@ async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, compl
             parse_mode='Markdown',
             reply_markup=complaint_notification_kb(complaint_id)
         )
+        # ارسال مدارک به صورت جداگانه با کپشن
         if complaint['evidence_files']:
             files = json.loads(complaint['evidence_files'])
             for f in files:
                 file_id = f['file_id']
+                caption = f.get('caption', '')
                 try:
                     if f['type'] == 'photo':
-                        await context.bot.send_photo(OWNER_ID, file_id, caption=f"📎 مدرک # {complaint_id}")
+                        await context.bot.send_photo(
+                            OWNER_ID,
+                            file_id,
+                            caption=f"📎 مدرک #{complaint_id}\n{caption}" if caption else f"📎 مدرک #{complaint_id}"
+                        )
                     elif f['type'] == 'document':
-                        await context.bot.send_document(OWNER_ID, file_id, caption=f"📎 مدرک # {complaint_id}")
+                        await context.bot.send_document(
+                            OWNER_ID,
+                            file_id,
+                            caption=f"📎 مدرک #{complaint_id}\n{caption}" if caption else f"📎 مدرک #{complaint_id}"
+                        )
                 except Exception as e:
                     logger.error(f"Error forwarding evidence: {e}")
     except Exception as e:
@@ -567,11 +606,12 @@ async def admin_reply_text_handler(update: Update, context: ContextTypes.DEFAULT
         "UPDATE complaints SET status = 'replied', reply_text = ?, replied_at = ? WHERE id = ?",
         (reply_text, now_tehran(), complaint_id)
     )
-    log_action(uid, "admin_reply", f"to complaint {complaint_id}")
+    log_action(uid, "admin_reply", f"پاسخ به شکایت #{complaint_id}")
 
-    complaint = db_one("SELECT plaintiff_telegram_id FROM complaints WHERE id = ?", (complaint_id,))
+    complaint = db_one("SELECT plaintiff_telegram_id, plaintiff_name FROM complaints WHERE id = ?", (complaint_id,))
     if complaint:
         plaintiff_id = complaint['plaintiff_telegram_id']
+        plaintiff_name = complaint['plaintiff_name'] or 'کاربر'
         try:
             await context.bot.send_message(
                 plaintiff_id,
@@ -584,6 +624,7 @@ async def admin_reply_text_handler(update: Update, context: ContextTypes.DEFAULT
                 f"✅ پاسخ شما به شکایت #{complaint_id} با موفقیت ارسال شد.",
                 reply_markup=main_menu_kb(uid)
             )
+            log_action(uid, "admin_reply", f"پاسخ به شکایت #{complaint_id} - کاربر: {plaintiff_name}")
         except Exception as e:
             logger.error(f"Error sending reply to user: {e}")
             await update.message.reply_text(
@@ -625,7 +666,7 @@ async def admin_toggle_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     new_status = "off" if bot_is_on() else "on"
     set_bot_status(new_status)
-    log_action(uid, "toggle_bot", f"status={new_status}")
+    log_action(uid, "toggle_bot", f"وضعیت: {'خاموش' if new_status == 'off' else 'روشن'}")
     status_text = "🟢 روشن" if new_status == "on" else "🔴 خاموش"
     await query.edit_message_text(
         f"✅ وضعیت ربات: {status_text}",
@@ -646,10 +687,12 @@ async def admin_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not rows:
         await query.edit_message_text("📭 هیچ لاگی وجود ندارد.", reply_markup=admin_kb())
         return
+
     text = "📋 **لاگ‌های اخیر**\n━━━━━━━━━━━━━━━━━━━\n"
     for row in rows:
+        user_info = f"کاربر: {row['user_id']}" if row['user_id'] else "سیستم"
         text += f"🕐 {row['created_at']}\n"
-        text += f"👤 {row['user_id'] or 'سیستم'}\n"
+        text += f"👤 {user_info}\n"
         text += f"📌 {row['action']}\n"
         if row['details']:
             text += f"📝 {row['details']}\n"
@@ -695,7 +738,7 @@ async def admin_backup_export(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "برای بازیابی، از بخش «بازیابی از پشتیبان» استفاده کنید.",
             parse_mode='Markdown'
         )
-        log_action(uid, "backup_export", "Backup exported")
+        log_action(uid, "backup_export", f"تعداد رکوردها: {len(json.loads(json_data).get('complaints', []))}")
         await query.edit_message_text(
             "✅ پشتیبان با موفقیت تهیه و ارسال شد.",
             reply_markup=backup_kb()
@@ -770,7 +813,7 @@ async def admin_backup_import_confirm(update: Update, context: ContextTypes.DEFA
     await query.edit_message_text("🔄 در حال بازیابی... لطفاً صبر کنید.", parse_mode='Markdown')
     success, msg = import_full_backup(json_data)
     if success:
-        log_action(uid, "backup_import", "Restore successful")
+        log_action(uid, "backup_import", "بازیابی موفقیت‌آمیز")
         await query.edit_message_text(
             "✅ بازیابی با موفقیت انجام شد.\nلطفاً ربات را ری‌استارت کنید.",
             reply_markup=admin_kb()
@@ -835,7 +878,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await admin_back(update, context)
         return
 
-    # اگر کالبک دیگری بود که مدیریت نشد، بی‌کار باشد
+    # اگر کالبک دیگری بود که مدیریت نشد
     await query.edit_message_text("⚠️ این دکمه معتبر نیست.", reply_markup=main_menu_kb(uid))
 
 # -----------------------------
@@ -851,17 +894,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = update.message.text
 
-    # دکمه ثبت شکایت - اینجا دیگر مستقیماً شروع نمی‌کنیم، بلکه به کانورسیشن واگذار می‌کنیم
-    # اما چون کانورسیشن entry point دارد، این پیام توسط کانورسیشن گرفته نمی‌شود
-    # پس باید خودمان آن را به کانورسیشن بدهیم. اما راه‌حل بهتر: اینجا را خالی بگذاریم و entry_point کانورسیشن را با MessageHandler پر کنیم.
-    # در نتیجه این تابع فقط برای دکمه پنل مدیریت و سایر پیام‌ها استفاده می‌شود.
-
     # دکمه پنل مدیریت (فقط مالک)
     if text == BTN_ADMIN and is_owner(uid):
         await update.message.reply_text("🛠 پنل مدیریت", reply_markup=admin_kb())
         return
 
-    # اگر کاربر پیام دیگری غیر از دکمه‌ها ارسال کرد، پیام مناسب بدهیم
+    # اگر کاربر پیام دیگری غیر از دکمه‌ها ارسال کرد
     await update.message.reply_text(
         "لطفاً از دکمه‌های منو استفاده کنید یا عملیات جاری را کامل کنید.",
         reply_markup=main_menu_kb(uid)
@@ -869,7 +907,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ==================== Conversation Handlers ====================
 
-# کانورسیشن ثبت شکایت - با دو نوع entry point
+# کانورسیشن ثبت شکایت
 complaint_conv = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(complaint_start, pattern="^start_complaint$"),
@@ -935,10 +973,10 @@ def main() -> None:
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_backup_import_conv)
 
-    # Callback handler برای کالبک‌های عمومی (غیر از کانورسیشن)
+    # Callback handler برای کالبک‌های عمومی
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Message handler برای دکمه‌های منو و پیام‌های دیگر (که توسط کانورسیشن‌ها گرفته نمی‌شوند)
+    # Message handler برای دکمه‌های منو و پیام‌های دیگر
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("ربات دادگاه عدالت کملوت با موفقیت راه‌اندازی شد.")
