@@ -831,21 +831,13 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await query.edit_message_text("🛠 پنل مدیریت", reply_markup=admin_kb(), parse_mode='Markdown')
 
-# -----------------------------
-# Callback Handler - فقط برای کالبک‌های مدیریتی
-# -----------------------------
+# ==================== Callback Handler (فقط مدیریتی) ====================
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """مدیریت کالبک‌های مدیریتی (غیر از کانورسیشن)"""
+async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """مدیریت کالبک‌های مدیریتی (با پیشوند admin_)"""
     query = update.callback_query
     data = query.data
 
-    # کالبک‌هایی که توسط کانورسیشن مدیریت می‌شوند: اینجا کاری نمی‌کنیم
-    if data in ("submit_complaint", "evidence_done", "cancel_action", "start_complaint", "admin_reply_", "admin_backup_import_confirm"):
-        # اجازه می‌دهیم کانورسیشن آنها را بگیرد
-        return
-
-    # فقط کالبک‌های مدیریتی را اینجا مدیریت می‌کنیم
     if not await check_access(update, context):
         return
 
@@ -853,30 +845,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "admin_panel":
         await admin_panel(update, context)
-        return
-    if data == "admin_toggle_bot":
+    elif data == "admin_toggle_bot":
         await admin_toggle_bot(update, context)
-        return
-    if data == "admin_logs":
+    elif data == "admin_logs":
         await admin_logs(update, context)
-        return
-    if data == "admin_backup":
+    elif data == "admin_backup":
         await admin_backup_menu(update, context)
-        return
-    if data == "admin_backup_export":
+    elif data == "admin_backup_export":
         await admin_backup_export(update, context)
-        return
-    if data == "admin_back":
+    elif data == "admin_back":
         await admin_back(update, context)
-        return
+    else:
+        await query.answer("دکمه نامعتبر", show_alert=True)
 
-    # اگر کالبک دیگری بود
-    await query.answer()
-    await query.edit_message_text("⚠️ این دکمه معتبر نیست.", reply_markup=main_menu_kb(uid))
-
-# -----------------------------
-# Message Handler - برای دکمه‌های منوی اصلی
-# -----------------------------
+# ==================== Message Handler ====================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
@@ -887,12 +869,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = update.message.text
 
-    # دکمه پنل مدیریت (فقط مالک)
     if text == BTN_ADMIN and is_owner(uid):
         await update.message.reply_text("🛠 پنل مدیریت", reply_markup=admin_kb())
         return
 
-    # اگر کاربر پیام دیگری غیر از دکمه‌ها ارسال کرد
     await update.message.reply_text(
         "لطفاً از دکمه‌های منو استفاده کنید یا عملیات جاری را کامل کنید.",
         reply_markup=main_menu_kb(uid)
@@ -900,7 +880,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ==================== Conversation Handlers ====================
 
-# کانورسیشن ثبت شکایت
 complaint_conv = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(complaint_start, pattern="^start_complaint$"),
@@ -925,7 +904,6 @@ complaint_conv = ConversationHandler(
     ],
 )
 
-# کانورسیشن پاسخ به شکایت توسط مالک
 admin_reply_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(admin_reply_start, pattern="^admin_reply_")],
     states={
@@ -938,7 +916,6 @@ admin_reply_conv = ConversationHandler(
     ],
 )
 
-# کانورسیشن بازیابی پشتیبان
 admin_backup_import_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(admin_backup_import_start, pattern="^admin_backup_import$")],
     states={
@@ -961,15 +938,15 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
 
-    # Conversation handlers (قبل از handlerهای عمومی)
+    # Conversation handlers (اولویت بالاتر)
     app.add_handler(complaint_conv)
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_backup_import_conv)
 
-    # Callback handler برای کالبک‌های مدیریتی (که توسط کانورسیشن‌ها گرفته نمی‌شوند)
-    app.add_handler(CallbackQueryHandler(handle_callback))
+    # Callback handler فقط برای کالبک‌های مدیریتی (با پیشوند admin_)
+    app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
 
-    # Message handler برای دکمه‌های منو و پیام‌های دیگر
+    # Message handler برای دکمه‌های منو (غیر از دستورات)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("ربات دادگاه عدالت کملوت با موفقیت راه‌اندازی شد.")
