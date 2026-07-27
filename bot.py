@@ -677,7 +677,6 @@ async def owner_direct_reply_handler(update: Update, context: ContextTypes.DEFAU
     if "شماره شکایت:" not in replied_text:
         return
 
-    # استخراج شماره شکایت از متن
     match = re.search(r"شماره شکایت:\s*`?(\d+)`?", replied_text)
     if not match:
         match = re.search(r"شماره شکایت:\s*(\d+)", replied_text)
@@ -705,7 +704,6 @@ async def owner_direct_reply_handler(update: Update, context: ContextTypes.DEFAU
             parse_mode='Markdown'
         )
 
-        # بروزرسانی دیتابیس
         db_exec(
             "UPDATE complaints SET status = 'replied', reply_text = ?, replied_at = ? WHERE id = ?",
             (answer_text, now_tehran(), complaint_id)
@@ -941,6 +939,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # ==================== Message Handler (فقط برای دکمه‌های منو) ====================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """مدیریت پیام‌های متنی که توسط کانورسیشن گرفته نشده‌اند"""
     if not update.message or not update.effective_user:
         return
     if not await check_access(update, context):
@@ -949,12 +948,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = update.message.text
 
-    # فقط دکمه مدیریت را مدیریت می‌کنیم (چون دکمه ثبت شکایت توسط کانورسیشن گرفته می‌شود)
+    # دکمه پنل مدیریت (فقط مالک)
     if text == BTN_ADMIN and is_owner(uid):
         await update.message.reply_text("🛠 پنل مدیریت", reply_markup=admin_kb())
         return
 
-    # اگر کاربر پیام دیگری ارسال کرد (نه دکمه‌ها)
+    # اگر دکمه ثبت شکایت است، آن را نادیده می‌گیریم چون کانورسیشن آن را می‌گیرد
+    if text == BTN_START_COMPLAINT:
+        return
+
+    # اگر کاربر پیام دیگری ارسال کرد
     await update.message.reply_text(
         "لطفاً از دکمه‌های منو استفاده کنید یا عملیات جاری را کامل کنید.",
         reply_markup=main_menu_kb(uid)
@@ -965,7 +968,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 complaint_conv = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(complaint_start, pattern="^start_complaint$"),
-        MessageHandler(filters.Text(BTN_START_COMPLAINT), complaint_start),
+        MessageHandler(filters.Regex(f"^{BTN_START_COMPLAINT}$"), complaint_start),
     ],
     states={
         S_PLAINTIFF_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, plaintiff_info_handler)],
