@@ -65,8 +65,6 @@ S_ADMIN_REPLY_TEXT = 10
 # Admin backup/restore states
 S_ADMIN_BACKUP_IMPORT_FILE = 20
 S_ADMIN_BACKUP_CONFIRM = 21
-S_RESTORE_ACCOUNT_FILE = 30
-S_RESTORE_ACCOUNT_CONFIRM = 31
 
 # -----------------------------
 # SQLite helpers
@@ -326,7 +324,6 @@ async def plaintiff_info_handler(update: Update, context: ContextTypes.DEFAULT_T
     if not text:
         await update.message.reply_text("❌ لطفاً متن را ارسال کنید.", reply_markup=cancel_kb())
         return S_PLAINTIFF_INFO
-    # Store raw text for now; later we can parse but keep simple.
     get_temp(context)['plaintiff_raw'] = text
     set_state(context, S_DEFENDANT_INFO)
     await update.message.reply_text(
@@ -354,14 +351,12 @@ async def defendant_info_handler(update: Update, context: ContextTypes.DEFAULT_T
         ])
     )
     get_temp(context)['evidence_texts'] = []
-    get_temp(context)['evidence_files'] = []  # list of dicts {type, file_id, caption?}
+    get_temp(context)['evidence_files'] = []
     return S_EVIDENCE
 
 async def evidence_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Handle incoming messages (text, photo, document, etc.)
     temp = get_temp(context)
     if update.message.text:
-        # treat as evidence text
         temp['evidence_texts'].append(update.message.text)
         await update.message.reply_text("✅ متن به عنوان مدرک ذخیره شد. می‌توانید مدارک دیگر ارسال کنید یا روی دکمه پایان کلیک کنید.")
     elif update.message.photo:
@@ -379,7 +374,6 @@ async def evidence_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def evidence_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    # Show summary and ask for confirmation
     temp = get_temp(context)
     plaintiff_raw = temp.get('plaintiff_raw', '')
     defendant_info = temp.get('defendant_info', '')
@@ -415,13 +409,11 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     uid = update.effective_user.id
     temp = get_temp(context)
-    # Parse plaintiff info from raw text (simple split)
     plaintiff_raw = temp.get('plaintiff_raw', '')
     defendant_info = temp.get('defendant_info', '')
     evidence_texts = temp.get('evidence_texts', [])
     evidence_files = temp.get('evidence_files', [])
 
-    # Extract fields (simple heuristic)
     lines = plaintiff_raw.split('\n')
     plaintiff_name = ''
     plaintiff_nid = ''
@@ -437,7 +429,6 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         elif 'آیدی تلگرام' in line:
             plaintiff_tg_id = line.split(':', 1)[-1].strip()
 
-    # Store in DB
     evidence_files_json = json.dumps(evidence_files) if evidence_files else None
     evidence_text_combined = "\n".join(evidence_texts) if evidence_texts else None
     created_at = now_tehran()
@@ -455,7 +446,6 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     complaint_id = cursor.lastrowid
     log_action(uid, "complaint_submitted", f"id={complaint_id}")
 
-    # Notify user
     await query.edit_message_text(
         "✅ **درخواست شما با موفقیت ثبت شد.**\n\n"
         "بزودی پیامی حاوی نام شاکی و متهم و تاریخ برگزاری دادگاه، در بخش دادگاه کملوت ارسال خواهد شد.",
@@ -465,7 +455,6 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     set_state(context, None)
     clear_temp(context)
 
-    # Send notification to owner
     await notify_owner(update, context, complaint_id)
 
 async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, complaint_id: int):
@@ -495,7 +484,6 @@ async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, compl
         msg += "فایل‌ها: (ندارد)\n"
     msg += f"\n🕐 زمان ثبت: {complaint['created_at']}"
 
-    # Send to owner
     try:
         await context.bot.send_message(
             OWNER_ID,
@@ -503,7 +491,6 @@ async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, compl
             parse_mode='Markdown',
             reply_markup=complaint_notification_kb(complaint_id)
         )
-        # Forward evidence files to owner
         if complaint['evidence_files']:
             files = json.loads(complaint['evidence_files'])
             for f in files:
@@ -532,7 +519,6 @@ async def admin_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not await check_access(update, context):
         return ConversationHandler.END
 
-    # Extract complaint ID from callback data
     complaint_id = int(query.data.split('_')[2])
     context.user_data['reply_complaint_id'] = complaint_id
     await query.edit_message_text(
@@ -559,14 +545,12 @@ async def admin_reply_text_handler(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ خطا: شناسه شکایت یافت نشد.")
         return ConversationHandler.END
 
-    # Update complaint
     db_exec(
         "UPDATE complaints SET status = 'replied', reply_text = ?, replied_at = ? WHERE id = ?",
         (reply_text, now_tehran(), complaint_id)
     )
     log_action(uid, "admin_reply", f"to complaint {complaint_id}")
 
-    # Get plaintiff telegram ID
     complaint = db_one("SELECT plaintiff_telegram_id FROM complaints WHERE id = ?", (complaint_id,))
     if complaint:
         plaintiff_id = complaint['plaintiff_telegram_id']
@@ -609,9 +593,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not await check_access(update, context):
         return
 
-    # If it's a callback, edit message; else send new
-    text = "🛠 **پنل مدیریت**"
-    await query.edit_message_text(text, reply_markup=admin_kb(), parse_mode='Markdown')
+    await query.edit_message_text("🛠 **پنل مدیریت**", reply_markup=admin_kb(), parse_mode='Markdown')
 
 async def admin_toggle_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -804,17 +786,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = update.message.text
 
-    # Handle main menu buttons
     if text == BTN_START_COMPLAINT:
-        # Start complaint flow (via callback, but we can also handle as message)
-        # We'll use callback for consistency, but we can trigger the same flow
-        # Since start is a message, we can simulate callback by calling the handler
-        # But better: we can use a command or inline button. For simplicity, we treat as a message to start.
-        # However, the flow uses ConversationHandler with entry points; we can add a MessageHandler entry point.
-        # We'll rely on the ConversationHandler entry point which is CallbackQueryHandler.
-        # So we need to send an inline keyboard with the button.
-        # Actually, we already have the button in main menu as a reply keyboard.
-        # We'll handle it here: start the conversation by sending a message and setting state.
         set_state(context, S_PLAINTIFF_INFO)
         clear_temp(context)
         msg = (
@@ -850,7 +822,11 @@ complaint_conv = ConversationHandler(
         S_PLAINTIFF_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, plaintiff_info_handler)],
         S_DEFENDANT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, defendant_info_handler)],
         S_EVIDENCE: [
-            MessageHandler(filters.PHOTO | filters.DOCUMENT | filters.TEXT & ~filters.COMMAND, evidence_handler),
+            # Fixed: use filters.Document.ALL instead of filters.DOCUMENT
+            MessageHandler(
+                filters.PHOTO | filters.Document.ALL | (filters.TEXT & ~filters.COMMAND),
+                evidence_handler
+            ),
             CallbackQueryHandler(evidence_done, pattern="^evidence_done$")
         ],
         S_CONFIRM: [CallbackQueryHandler(submit_complaint, pattern="^submit_complaint$")],
@@ -874,9 +850,6 @@ admin_backup_import_conv = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-
-# Also add callback for the start complaint button in main menu (if user clicks inline, but we use reply keyboard)
-# We'll add a command handler for /start as well.
 
 # -----------------------------
 # Main
