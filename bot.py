@@ -831,7 +831,9 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await query.edit_message_text("🛠 پنل مدیریت", reply_markup=admin_kb(), parse_mode='Markdown')
 
-# ==================== Callback Handler (فقط مدیریتی) ====================
+# -----------------------------
+# Callback Handler (فقط مدیریتی)
+# -----------------------------
 
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """مدیریت کالبک‌های مدیریتی (با پیشوند admin_)"""
@@ -858,7 +860,9 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await query.answer("دکمه نامعتبر", show_alert=True)
 
-# ==================== Message Handler ====================
+# -----------------------------
+# Message Handler (فقط برای دکمه‌های منو)
+# -----------------------------
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
@@ -869,10 +873,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = update.message.text
 
+    # فقط دکمه مدیریت را مدیریت می‌کنیم (چون دکمه ثبت شکایت توسط کانورسیشن گرفته می‌شود)
     if text == BTN_ADMIN and is_owner(uid):
         await update.message.reply_text("🛠 پنل مدیریت", reply_markup=admin_kb())
         return
 
+    # اگر کاربر پیام دیگری ارسال کرد (نه دکمه‌ها)
     await update.message.reply_text(
         "لطفاً از دکمه‌های منو استفاده کنید یا عملیات جاری را کامل کنید.",
         reply_markup=main_menu_kb(uid)
@@ -883,7 +889,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 complaint_conv = ConversationHandler(
     entry_points=[
         CallbackQueryHandler(complaint_start, pattern="^start_complaint$"),
-        MessageHandler(filters.Regex(f"^{BTN_START_COMPLAINT}$"), complaint_start),
+        # استفاده از filters.Text با متن دقیق
+        MessageHandler(filters.Text(BTN_START_COMPLAINT), complaint_start),
     ],
     states={
         S_PLAINTIFF_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, plaintiff_info_handler)],
