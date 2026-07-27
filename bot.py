@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""ربات دادگاه عدالت کملوت - نسخه نهایی با رفع کامل باگ‌ها"""
+"""ربات دادگاه عدالت کملوت - نسخه نهایی با رفع کامل باگ‌ها و قابلیت ریپلای"""
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import json
 import sqlite3
 import threading
@@ -157,6 +158,7 @@ def log_action(user_id: Optional[int], action: str, details: str = "") -> None:
         "toggle_bot": "تغییر وضعیت ربات",
         "backup_export": "گرفتن پشتیبان",
         "backup_import": "بازیابی از پشتیبان",
+        "owner_reply": "پاسخ مالک به شاکی",
     }
     persian_action = action_map.get(action, action)
     db_exec(
@@ -291,39 +293,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode='Markdown'
     )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """لغو عملیات جاری - هم برای پیام و هم کالبک - برمی‌گرداند ConversationHandler.END"""
-    uid = update.effective_user.id
-    set_state(context, None)
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """لغو عملیات جاری - هم برای پیام و هم کالبک"""
     clear_temp(context)
+    set_state(context, None)
 
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text(
-            "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
-            reply_markup=main_menu_kb(uid)
-        )
-    else:
-        await update.message.reply_text(
-            "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
-            reply_markup=main_menu_kb(uid)
-        )
+        try:
+            await query.edit_message_text("❌ عملیات لغو شد و به منوی اصلی بازگشتید.")
+        except Exception:
+            await query.message.reply_text("❌ عملیات لغو شد و به منوی اصلی بازگشتید.")
+    elif update.message:
+        await update.message.reply_text("❌ عملیات لغو شد و به منوی اصلی بازگشتید.")
+
     return ConversationHandler.END
-
-# ==================== Handler سراسری برای دکمه لغو ====================
-
-async def handle_global_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """مدیریت دکمه لغو در خارج از کانورسیشن‌ها (مثل پنل مدیریت)"""
-    query = update.callback_query
-    await query.answer()
-    uid = update.effective_user.id
-    set_state(context, None)
-    clear_temp(context)
-    await query.edit_message_text(
-        "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
-        reply_markup=main_menu_kb(uid)
-    )
 
 # -----------------------------
 # Complaint Registration Flow
@@ -389,7 +374,7 @@ async def defendant_info_handler(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ پایان ارسال مدارک", callback_data="evidence_done")],
-            [InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")]
+            [InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")],
         ])
     )
     get_temp(context)['evidence_texts'] = []
@@ -460,36 +445,37 @@ async def evidence_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     set_state(context, S_CONFIRM)
     return S_CONFIRM
 
-async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ثبت نهایی شکایت - بازگشت ConversationHandler.END برای خاتمه مکالمه"""
     query = update.callback_query
     await query.answer()
-    uid = update.effective_user.id
+
     temp = get_temp(context)
-    plaintiff_raw = temp.get('plaintiff_raw', '')
-    defendant_info = temp.get('defendant_info', '')
-    evidence_texts = temp.get('evidence_texts', [])
-    evidence_files = temp.get('evidence_files', [])
+    uid = update.effective_user.id
 
-    # Parse plaintiff info
-    lines = plaintiff_raw.split('\n')
-    plaintiff_name = ''
-    plaintiff_nid = ''
-    plaintiff_account = ''
-    plaintiff_tg_id = ''
-    for line in lines:
-        if 'نام کملوتی' in line:
-            plaintiff_name = line.split(':', 1)[-1].strip()
-        elif 'کدملی' in line:
-            plaintiff_nid = line.split(':', 1)[-1].strip()
-        elif 'شماره حساب' in line:
-            plaintiff_account = line.split(':', 1)[-1].strip()
-        elif 'آیدی تلگرام' in line:
-            plaintiff_tg_id = line.split(':', 1)[-1].strip()
+    plaintiff_raw = temp.get("plaintiff_raw", "")
+    defendant_info = temp.get("defendant_info", "")
+    evidence_texts = temp.get("evidence_texts", [])
+    evidence_files = temp.get("evidence_files", [])
 
+    plaintiff_name = ""
+    plaintiff_nid = ""
+    plaintiff_account = ""
+    plaintiff_tg_id = f"@{update.effective_user.username}" if update.effective_user.username else str(uid)
+
+    for line in plaintiff_raw.splitlines():
+        line = line.strip()
+        if "نام کملوتی" in line:
+            plaintiff_name = line.split(":", 1)[1].strip()
+        elif "کدملی" in line:
+            plaintiff_nid = line.split(":", 1)[1].strip()
+        elif "شماره حساب" in line:
+            plaintiff_account = line.split(":", 1)[1].strip()
+
+    evidence_text_combined = "\n".join(evidence_texts).strip()
     evidence_files_json = json.dumps(evidence_files, ensure_ascii=False) if evidence_files else None
-    evidence_text_combined = "\n".join(evidence_texts) if evidence_texts else None
     created_at = now_tehran()
+
     cursor = db_exec(
         """
         INSERT INTO complaints (
@@ -498,90 +484,107 @@ async def submit_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             evidence_text, evidence_files, status, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
-        (uid, plaintiff_name, plaintiff_nid, plaintiff_account, plaintiff_tg_id,
-         defendant_info, evidence_text_combined, evidence_files_json, created_at)
+        (
+            uid, plaintiff_name, plaintiff_nid, plaintiff_account,
+            plaintiff_tg_id, defendant_info, evidence_text_combined,
+            evidence_files_json, created_at
+        )
     )
     complaint_id = cursor.lastrowid
-    log_action(uid, "complaint_submitted", f"شکایت #{complaint_id} - شاکی: {plaintiff_name} - متهم: {defendant_info[:30]}...")
+
+    log_action(uid, "complaint_submitted", f"شکایت #{complaint_id} - شاکی: {plaintiff_name}")
+
+    clear_temp(context)
+    set_state(context, None)
 
     await query.edit_message_text(
-        "✅ **درخواست شما با موفقیت ثبت شد.**\n\n"
-        "بزودی پیامی حاوی نام شاکی و متهم و تاریخ برگزاری دادگاه، در بخش دادگاه کملوت ارسال خواهد شد.",
-        reply_markup=main_menu_kb(uid),
-        parse_mode='Markdown'
+        "✅ درخواست شما با موفقیت ثبت شد، بزودی پیامی حاوی نام شاکی و متهم و تاریخ برگزاری دادگاه، در بخش دادگاه کملوت ارسال خواهد شد.\n\n"
+        f"شماره شکایت: {complaint_id}",
+        reply_markup=main_menu_kb(uid)
     )
-    set_state(context, None)
-    clear_temp(context)
 
     await notify_owner(update, context, complaint_id)
-    
-    # مهم: بازگشت ConversationHandler.END برای خاتمه مکالمه
+
     return ConversationHandler.END
 
 async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, complaint_id: int):
-    complaint = db_one("SELECT * FROM complaints WHERE id = ?", (complaint_id,))
-    if not complaint:
-        return
-    msg = (
-        f"⚖️ **شکایت جدید #{complaint_id}**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 **شاکی:**\n"
-        f"نام: {complaint['plaintiff_name'] or 'نامشخص'}\n"
-        f"کدملی: {complaint['plaintiff_national_id'] or 'نامشخص'}\n"
-        f"حساب: {complaint['plaintiff_account'] or 'نامشخص'}\n"
-        f"آیدی تلگرام: {complaint['plaintiff_tg_id'] or 'نامشخص'}\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 **متهم:**\n{complaint['defendant_info'] or 'ذکر نشده'}\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"📎 **مدارک:**\n"
-    )
-    if complaint['evidence_text']:
-        msg += f"متن:\n{complaint['evidence_text']}\n"
-    else:
-        msg += "متن: (ندارد)\n"
-    if complaint['evidence_files']:
-        files = json.loads(complaint['evidence_files'])
-        msg += f"تعداد فایل‌ها: {len(files)}\n"
-        for i, f in enumerate(files, 1):
-            caption = f.get('caption', 'بدون کپشن')
-            msg += f"  {i}. {f['type']} - {caption[:50]}\n"
-    else:
-        msg += "فایل‌ها: (ندارد)\n"
-    msg += f"\n🕐 زمان ثبت: {complaint['created_at']}"
-
+    """ارسال پیام مرتب و کامل به مالک با آیدی 1275490079"""
     try:
+        complaint = db_one("SELECT * FROM complaints WHERE id = ?", (complaint_id,))
+        if not complaint:
+            return
+
+        evidence_files = []
+        if complaint['evidence_files']:
+            try:
+                evidence_files = json.loads(complaint['evidence_files'])
+            except Exception:
+                evidence_files = []
+
+        msg = (
+            f"📌 *ثبت شکایت جدید*\n\n"
+            f"🔖 شماره شکایت: `{complaint_id}`\n"
+            f"🕒 تاریخ ثبت: `{complaint['created_at']}`\n\n"
+            f"👤 *اطلاعات شاکی*\n"
+            f"• نام: {complaint['plaintiff_name'] or 'نامشخص'}\n"
+            f"• کد ملی: {complaint['plaintiff_national_id'] or 'نامشخص'}\n"
+            f"• شماره حساب: {complaint['plaintiff_account'] or 'نامشخص'}\n"
+            f"• آیدی تلگرام: {complaint['plaintiff_tg_id'] or complaint['plaintiff_telegram_id'] or 'نامشخص'}\n\n"
+            f"👤 *اطلاعات متهم*\n"
+            f"{complaint['defendant_info'] or '—'}\n\n"
+            f"📝 *متن مدارک / توضیحات*\n"
+            f"{complaint['evidence_text'] or '—'}\n\n"
+            f"📎 *فهرست مدارک*\n"
+        )
+
+        if evidence_files:
+            for idx, f in enumerate(evidence_files, start=1):
+                ftype = f.get("type", "unknown")
+                fname = f.get("file_name", "")
+                caption = f.get("caption", "")
+                display_name = fname or caption or f"فایل {idx}"
+                msg += f"• {idx}. {ftype.upper()} - {display_name[:30]}\n"
+        else:
+            msg += "• بدون فایل\n"
+
         await context.bot.send_message(
-            OWNER_ID,
-            msg,
-            parse_mode='Markdown',
+            chat_id=OWNER_ID,
+            text=msg,
+            parse_mode="Markdown",
             reply_markup=complaint_notification_kb(complaint_id)
         )
-        if complaint['evidence_files']:
-            files = json.loads(complaint['evidence_files'])
-            for f in files:
-                file_id = f['file_id']
-                caption = f.get('caption', '')
-                try:
-                    if f['type'] == 'photo':
-                        await context.bot.send_photo(
-                            OWNER_ID,
-                            file_id,
-                            caption=f"📎 مدرک #{complaint_id}\n{caption}" if caption else f"📎 مدرک #{complaint_id}"
-                        )
-                    elif f['type'] == 'document':
-                        await context.bot.send_document(
-                            OWNER_ID,
-                            file_id,
-                            caption=f"📎 مدرک #{complaint_id}\n{caption}" if caption else f"📎 مدرک #{complaint_id}"
-                        )
-                except Exception as e:
-                    logger.error(f"Error forwarding evidence: {e}")
-    except Exception as e:
-        logger.error(f"Failed to notify owner: {e}")
 
-# -----------------------------
-# Admin Reply Flow
-# -----------------------------
+        # ارسال جداگانهٔ فایل‌ها به مالک
+        for f in evidence_files:
+            try:
+                ftype = f.get("type")
+                fid = f.get("file_id")
+                fname = f.get("file_name", "")
+                caption = f.get("caption", "")
+                display_text = f"📎 مدرک شکایت #{complaint_id}\n{fname or caption or ''}".strip()
+
+                if not fid:
+                    continue
+
+                if ftype == "photo":
+                    await context.bot.send_photo(
+                        chat_id=OWNER_ID,
+                        photo=fid,
+                        caption=display_text
+                    )
+                elif ftype == "document":
+                    await context.bot.send_document(
+                        chat_id=OWNER_ID,
+                        document=fid,
+                        caption=display_text
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send evidence file to owner: {e}")
+
+    except Exception as e:
+        logger.error(f"notify_owner failed: {e}")
+
+# ==================== Admin Reply Flow (پاسخ از طریق دکمه) ====================
 
 async def admin_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -655,9 +658,69 @@ async def admin_reply_text_handler(update: Update, context: ContextTypes.DEFAULT
     set_state(context, None)
     return ConversationHandler.END
 
-# -----------------------------
-# Admin Panel
-# -----------------------------
+# ==================== Owner Direct Reply (ریپلای به پیام) ====================
+
+async def owner_direct_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """مالک می‌تواند روی پیام شکایت ریپلای بزند و پاسخ مستقیم به شاکی ارسال شود"""
+    if not update.message or not update.message.text:
+        return
+
+    uid = update.effective_user.id
+    if uid != OWNER_ID:
+        return
+
+    replied = update.message.reply_to_message
+    if not replied:
+        return
+
+    replied_text = replied.text or replied.caption or ""
+    if "شماره شکایت:" not in replied_text:
+        return
+
+    # استخراج شماره شکایت از متن
+    match = re.search(r"شماره شکایت:\s*`?(\d+)`?", replied_text)
+    if not match:
+        match = re.search(r"شماره شکایت:\s*(\d+)", replied_text)
+    if not match:
+        await update.message.reply_text("❌ شماره شکایت در پیام پیدا نشد.")
+        return
+
+    complaint_id = int(match.group(1))
+    answer_text = update.message.text.strip()
+
+    complaint = db_one("SELECT plaintiff_telegram_id, plaintiff_name FROM complaints WHERE id = ?", (complaint_id,))
+    if not complaint:
+        await update.message.reply_text("❌ شکایت پیدا نشد.")
+        return
+
+    target_user_id = complaint['plaintiff_telegram_id']
+    plaintiff_name = complaint['plaintiff_name'] or 'کاربر'
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"📩 **پاسخ مالک ربات به شکایت شما #{complaint_id}**\n\n"
+                 f"{answer_text}\n\n"
+                 f"🕐 {now_tehran()}",
+            parse_mode='Markdown'
+        )
+
+        # بروزرسانی دیتابیس
+        db_exec(
+            "UPDATE complaints SET status = 'replied', reply_text = ?, replied_at = ? WHERE id = ?",
+            (answer_text, now_tehran(), complaint_id)
+        )
+        log_action(uid, "owner_reply", f"پاسخ به شکایت #{complaint_id} - کاربر: {plaintiff_name}")
+
+        await update.message.reply_text(
+            f"✅ پاسخ شما برای شاکی (شکایت #{complaint_id}) ارسال شد.",
+            reply_markup=main_menu_kb(uid)
+        )
+    except Exception as e:
+        logger.error(f"Failed to send owner reply: {e}")
+        await update.message.reply_text(f"❌ ارسال پاسخ ناموفق بود: {str(e)}")
+
+# ==================== Admin Panel ====================
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -764,7 +827,6 @@ async def admin_backup_export(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Export backup error: {e}")
         await query.edit_message_text(f"❌ خطا: {str(e)}", reply_markup=backup_kb())
 
-# Admin backup import conversation handlers
 async def admin_backup_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -861,8 +923,6 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not await check_access(update, context):
         return
 
-    uid = update.effective_user.id
-
     if data == "admin_panel":
         await admin_panel(update, context)
     elif data == "admin_toggle_bot":
@@ -916,7 +976,7 @@ complaint_conv = ConversationHandler(
                 evidence_handler
             ),
             CallbackQueryHandler(evidence_done, pattern="^evidence_done$"),
-            CallbackQueryHandler(cancel, pattern="^cancel_action$"),  # لغو در مرحله مدارک
+            CallbackQueryHandler(cancel, pattern="^cancel_action$"),
         ],
         S_CONFIRM: [CallbackQueryHandler(submit_complaint, pattern="^submit_complaint$")],
     },
@@ -969,12 +1029,15 @@ def main() -> None:
     app.add_handler(admin_backup_import_conv)
 
     # 2. Handler سراسری برای دکمه لغو (وقتی خارج از مکالمه هستیم)
-    app.add_handler(CallbackQueryHandler(handle_global_cancel, pattern="^cancel_action$"))
+    app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel_action$"))
 
     # 3. Handler برای کالبک‌های مدیریتی (با پیشوند admin_)
     app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
 
-    # 4. Message handler برای دکمه‌های منو و پیام‌های دیگر
+    # 4. Handler برای ریپلای مستقیم مالک (قبل از handle_message)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, owner_direct_reply_handler))
+
+    # 5. Message handler برای دکمه‌های منو و پیام‌های دیگر
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("ربات دادگاه عدالت کملوت با موفقیت راه‌اندازی شد.")
