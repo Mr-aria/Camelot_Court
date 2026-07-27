@@ -151,7 +151,6 @@ def set_bot_status(status: str) -> None:
     db_exec("INSERT INTO settings(key, value) VALUES('bot_status', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (status,))
 
 def log_action(user_id: Optional[int], action: str, details: str = "") -> None:
-    """ثبت لاگ با توضیحات قابل فهم"""
     action_map = {
         "complaint_submitted": "ثبت شکایت جدید",
         "admin_reply": "پاسخ به شکایت",
@@ -293,7 +292,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """لغو عملیات جاری - هم برای پیام و هم کالبک - برمی‌گرداند ConversationHandler.END"""
     uid = update.effective_user.id
     set_state(context, None)
     clear_temp(context)
@@ -538,7 +536,6 @@ async def notify_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, compl
             parse_mode='Markdown',
             reply_markup=complaint_notification_kb(complaint_id)
         )
-        # ارسال مدارک به صورت جداگانه با کپشن
         if complaint['evidence_files']:
             files = json.loads(complaint['evidence_files'])
             for f in files:
@@ -835,7 +832,7 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await query.edit_message_text("🛠 پنل مدیریت", reply_markup=admin_kb(), parse_mode='Markdown')
 
 # -----------------------------
-# Callback Handler - فقط برای کالبک‌های مدیریتی (غیر از کانورسیشن)
+# Callback Handler - برای کالبک‌های مدیریتی (غیر از کانورسیشن)
 # -----------------------------
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -848,7 +845,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     uid = update.effective_user.id
     data = query.data
 
-    # کالبک‌های پنل مدیریت (غیر از cancel_action که توسط کانورسیشن‌ها گرفته می‌شود)
+    # فقط کالبک‌های مدیریتی که توسط کانورسیشن‌ها گرفته نمی‌شوند
     if data == "admin_panel":
         await admin_panel(update, context)
         return
@@ -868,7 +865,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await admin_back(update, context)
         return
 
-    # اگر کالبک دیگری بود که مدیریت نشد (و توسط کانورسیشن هم گرفته نشد)
+    # اگر کالبک دیگری بود (مثل submit_complaint یا evidence_done یا cancel_action)
+    # اینجا نباید باشد، چون توسط کانورسیشن‌ها گرفته می‌شوند
+    # اگر رسید، یعنی مشکلی هست، پس فقط بی‌کاره
     await query.edit_message_text("⚠️ این دکمه معتبر نیست.", reply_markup=main_menu_kb(uid))
 
 # -----------------------------
@@ -963,7 +962,7 @@ def main() -> None:
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_backup_import_conv)
 
-    # Callback handler برای کالبک‌های مدیریتی (غیر از کانورسیشن)
+    # Callback handler برای کالبک‌های مدیریتی (که توسط کانورسیشن‌ها گرفته نمی‌شوند)
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     # Message handler برای دکمه‌های منو و پیام‌های دیگر
