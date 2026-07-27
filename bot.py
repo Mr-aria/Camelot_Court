@@ -284,13 +284,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """لغو عملیات جاری"""
     uid = update.effective_user.id
     set_state(context, None)
     clear_temp(context)
-    await update.message.reply_text(
-        "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
-        reply_markup=main_menu_kb(uid)
-    )
+    # اگر کالبک بود، پیام را ویرایش کن
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
+            reply_markup=main_menu_kb(uid)
+        )
+    else:
+        await update.message.reply_text(
+            "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
+            reply_markup=main_menu_kb(uid)
+        )
     return ConversationHandler.END
 
 # -----------------------------
@@ -298,26 +308,49 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # -----------------------------
 
 async def complaint_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    if not await check_access(update, context):
-        return ConversationHandler.END
-    set_state(context, S_PLAINTIFF_INFO)
-    clear_temp(context)
-    msg = (
-        "📝 **لطفاً اطلاعات خود (شاکی) را به صورت زیر وارد کنید:**\n\n"
-        "نام کملوتی: [نام خود]\n"
-        "کدملی کملوتی: [۶ رقم]\n"
-        "شماره حساب کملوتی: [۶ رقم]\n"
-        "آیدی تلگرام: [آیدی عددی یا یوزرنیم]\n\n"
-        "مثال:\n"
-        "نام کملوتی: علی رضایی\n"
-        "کدملی کملوتی: ۱۲۳۴۵۶\n"
-        "شماره حساب: ۷۸۹۰۱۲\n"
-        "آیدی تلگرام: @alireza یا ۱۲۳۴۵۶۷۸۹"
-    )
-    await query.edit_message_text(msg, parse_mode='Markdown', reply_markup=cancel_kb())
-    return S_PLAINTIFF_INFO
+    """شروع ثبت شکایت (از طریق کالبک یا پیام)"""
+    # اگر کالبک بود
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if not await check_access(update, context):
+            return ConversationHandler.END
+        set_state(context, S_PLAINTIFF_INFO)
+        clear_temp(context)
+        msg = (
+            "📝 **لطفاً اطلاعات خود (شاکی) را به صورت زیر وارد کنید:**\n\n"
+            "نام کملوتی: [نام خود]\n"
+            "کدملی کملوتی: [۶ رقم]\n"
+            "شماره حساب کملوتی: [۶ رقم]\n"
+            "آیدی تلگرام: [آیدی عددی یا یوزرنیم]\n\n"
+            "مثال:\n"
+            "نام کملوتی: علی رضایی\n"
+            "کدملی کملوتی: ۱۲۳۴۵۶\n"
+            "شماره حساب: ۷۸۹۰۱۲\n"
+            "آیدی تلگرام: @alireza یا ۱۲۳۴۵۶۷۸۹"
+        )
+        await query.edit_message_text(msg, parse_mode='Markdown', reply_markup=cancel_kb())
+        return S_PLAINTIFF_INFO
+    # اگر پیام بود
+    else:
+        if not await check_access(update, context):
+            return ConversationHandler.END
+        set_state(context, S_PLAINTIFF_INFO)
+        clear_temp(context)
+        msg = (
+            "📝 **لطفاً اطلاعات خود (شاکی) را به صورت زیر وارد کنید:**\n\n"
+            "نام کملوتی: [نام خود]\n"
+            "کدملی کملوتی: [۶ رقم]\n"
+            "شماره حساب کملوتی: [۶ رقم]\n"
+            "آیدی تلگرام: [آیدی عددی یا یوزرنیم]\n\n"
+            "مثال:\n"
+            "نام کملوتی: علی رضایی\n"
+            "کدملی کملوتی: ۱۲۳۴۵۶\n"
+            "شماره حساب: ۷۸۹۰۱۲\n"
+            "آیدی تلگرام: @alireza یا ۱۲۳۴۵۶۷۸۹"
+        )
+        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=cancel_kb())
+        return S_PLAINTIFF_INFO
 
 async def plaintiff_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
@@ -774,6 +807,53 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await query.edit_message_text("🛠 پنل مدیریت", reply_markup=admin_kb(), parse_mode='Markdown')
 
 # -----------------------------
+# Callback Handler برای مدیریت همه کالبک‌ها
+# -----------------------------
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """مدیریت کالبک‌هایی که توسط ConversationHandler گرفته نشده‌اند"""
+    query = update.callback_query
+    await query.answer()
+    if not await check_access(update, context):
+        return
+
+    uid = update.effective_user.id
+    data = query.data
+
+    # دکمه لغو عملیات
+    if data == "cancel_action":
+        set_state(context, None)
+        clear_temp(context)
+        await query.edit_message_text(
+            "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
+            reply_markup=main_menu_kb(uid)
+        )
+        return
+
+    # دکمه‌های پنل مدیریت
+    if data == "admin_panel":
+        await admin_panel(update, context)
+        return
+    if data == "admin_toggle_bot":
+        await admin_toggle_bot(update, context)
+        return
+    if data == "admin_logs":
+        await admin_logs(update, context)
+        return
+    if data == "admin_backup":
+        await admin_backup_menu(update, context)
+        return
+    if data == "admin_backup_export":
+        await admin_backup_export(update, context)
+        return
+    if data == "admin_back":
+        await admin_back(update, context)
+        return
+
+    # اگر کالبک توسط ConversationHandler مدیریت می‌شود، اینجا کاری نمی‌کنیم
+    # تا کانورسیشن‌ها آن را بگیرند
+
+# -----------------------------
 # Main Handler
 # -----------------------------
 
@@ -786,43 +866,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = update.message.text
 
+    # دکمه ثبت شکایت
     if text == BTN_START_COMPLAINT:
-        set_state(context, S_PLAINTIFF_INFO)
-        clear_temp(context)
-        msg = (
-            "📝 **لطفاً اطلاعات خود (شاکی) را به صورت زیر وارد کنید:**\n\n"
-            "نام کملوتی: [نام خود]\n"
-            "کدملی کملوتی: [۶ رقم]\n"
-            "شماره حساب کملوتی: [۶ رقم]\n"
-            "آیدی تلگرام: [آیدی عددی یا یوزرنیم]\n\n"
-            "مثال:\n"
-            "نام کملوتی: علی رضایی\n"
-            "کدملی کملوتی: ۱۲۳۴۵۶\n"
-            "شماره حساب: ۷۸۹۰۱۲\n"
-            "آیدی تلگرام: @alireza یا ۱۲۳۴۵۶۷۸۹"
-        )
-        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=cancel_kb())
+        await complaint_start(update, context)
         return
 
+    # دکمه پنل مدیریت (فقط مالک)
     if text == BTN_ADMIN and is_owner(uid):
         await update.message.reply_text("🛠 پنل مدیریت", reply_markup=admin_kb())
         return
 
-    # If we are in a state, let the conversation handlers take over
-    # But we also have the conversation handler for evidence which may need to catch files.
-    # We'll let the conversation handler manage.
+    # اگر در یک کانورسیشن هستیم، اجازه می‌دهیم کانورسیشن مدیریت کند
+    # (این پیام‌ها توسط handlerهای کانورسیشن گرفته می‌شوند)
 
 # -----------------------------
 # Conversation Handlers
 # -----------------------------
 
 complaint_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(complaint_start, pattern="^start_complaint$")],
+    entry_points=[
+        CallbackQueryHandler(complaint_start, pattern="^start_complaint$"),
+        # برای زمانی که کاربر با دکمه معمولی وارد می‌شود
+    ],
     states={
         S_PLAINTIFF_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, plaintiff_info_handler)],
         S_DEFENDANT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, defendant_info_handler)],
         S_EVIDENCE: [
-            # Fixed: use filters.Document.ALL instead of filters.DOCUMENT
             MessageHandler(
                 filters.PHOTO | filters.Document.ALL | (filters.TEXT & ~filters.COMMAND),
                 evidence_handler
@@ -831,7 +900,7 @@ complaint_conv = ConversationHandler(
         ],
         S_CONFIRM: [CallbackQueryHandler(submit_complaint, pattern="^submit_complaint$")],
     },
-    fallbacks=[CommandHandler("cancel", cancel)],
+    fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel, pattern="^cancel_action$")],
 )
 
 admin_reply_conv = ConversationHandler(
@@ -839,7 +908,7 @@ admin_reply_conv = ConversationHandler(
     states={
         S_ADMIN_REPLY_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply_text_handler)],
     },
-    fallbacks=[CommandHandler("cancel", cancel)],
+    fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel, pattern="^cancel_action$")],
 )
 
 admin_backup_import_conv = ConversationHandler(
@@ -848,7 +917,7 @@ admin_backup_import_conv = ConversationHandler(
         S_ADMIN_BACKUP_IMPORT_FILE: [MessageHandler(filters.Document.ALL, admin_backup_import_file)],
         S_ADMIN_BACKUP_CONFIRM: [CallbackQueryHandler(admin_backup_import_confirm, pattern="^admin_backup_import_confirm$")],
     },
-    fallbacks=[CommandHandler("cancel", cancel)],
+    fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel, pattern="^cancel_action$")],
 )
 
 # -----------------------------
@@ -867,16 +936,10 @@ def main() -> None:
     app.add_handler(admin_reply_conv)
     app.add_handler(admin_backup_import_conv)
 
-    # Callback handlers for admin panel
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
-    app.add_handler(CallbackQueryHandler(admin_toggle_bot, pattern="^admin_toggle_bot$"))
-    app.add_handler(CallbackQueryHandler(admin_logs, pattern="^admin_logs$"))
-    app.add_handler(CallbackQueryHandler(admin_backup_menu, pattern="^admin_backup$"))
-    app.add_handler(CallbackQueryHandler(admin_backup_export, pattern="^admin_backup_export$"))
-    app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
-    app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel_action$"))
+    # Callback handler برای کالبک‌های عمومی
+    app.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Message handler for main menu buttons and other messages (non-command)
+    # Message handler برای دکمه‌های منو و پیام‌های دیگر
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("ربات دادگاه عدالت کملوت راه‌اندازی شد.")
